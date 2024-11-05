@@ -6,25 +6,31 @@
 #include <termios.h>
 #include <unistd.h>
 
-/*** data ***/
+/*** defines ***/
+#define CTRL_KEY(k) ((k) & 0x1f)
 
-struct termios orig_termios;
+/*** data ***/
+struct editorConfig {
+	struct termios orig_termios;
+};
+struct editorConfig E;
 
 /*** terminal ***/
-
 void die(const char *s) {
+	write(STDOUT_FILENO, "\x1b[2J", 4);
+	write(STDOUT_FILENO, "\x1b[H", 3);
 	perror(s);																// prints the descriptive error message along with context of which part caused the error
 	exit(1);
 }
-
 void disableRawMode() {
-	if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios) == 1)				// TCSAFLUSH is to determine when to apply the changes. Here, to wait for pending output to be on the terminal and discard all other inputs which was not read
+	if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_termios) == 1)				// TCSAFLUSH is to determine when to apply the changes. Here, to wait for pending output to be on the terminal and discard all other inputs which was not read
 		die("tcsetattr");
-}	void enableRawMode() {			
-	if (tcgetattr(STDIN_FILENO, &orig_termios) == -1) die("tcgetattr");		// canonical/cooked mode is where the input is fed only when the user hits enter
-	tcgetattr(STDIN_FILENO, &orig_termios);									// get the terminal attributes and then save it to orig_termios struct
+}
+void enableRawMode() {			
+	if (tcgetattr(STDIN_FILENO, &E.orig_termios) == -1) die("tcgetattr");		// canonical/cooked mode is where the input is fed only when the user hits enter
+	tcgetattr(STDIN_FILENO, &E.orig_termios);									// get the terminal attributes and then save it to orig_termios struct
 	atexit(disableRawMode);													// at-exit is to run the disabling function automatically
-	struct termios raw = orig_termios;										// make a copy of the original struct to make changes to into raw mode
+	struct termios raw = E.orig_termios;										// make a copy of the original struct to make changes to into raw mode
 	raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);				// iflag - input flag:
 																			// 1. IXON refers to XOFF and XON transmission produced while using CTRL-S and CTRL-Q to pause and resume sending outputs
 																			// 2. ICRNL - inputflag carriage return to new line
@@ -42,20 +48,50 @@ void disableRawMode() {
 	raw.c_cc[VTIME] = 1;													// maximum amount of time before read() returns - 1/10th of seconds
 	if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) die("tcsetattr");	// set the new attributes according to the raw struct
 }
+char editorReadKey() {
+	int nread;
+	char c;
+	while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
+		if (nread == -1 && errno != EAGAIN) die("read");
+	}
+	return c;
+}
+
+/*** output ***/
+void editorDrawRows() {
+	int y;
+	for (y = 0; y < 24; y++) {
+    	write(STDOUT_FILENO, "~\r\n", 3);
+  	}
+}
+void editorRefreshScreen() {
+	write(STDOUT_FILENO, "\x1b[2J", 4);
+	write(STDOUT_FILENO, "\x1b[H", 3);
+
+	editorDrawRows();
+
+	write(STDOUT_FILENO, "\x1b[H", 3);
+}
+
+/*** input ***/
+void editorProcessKeypress() {
+	char c = editorReadKey();
+	switch (c) {
+    	case CTRL_KEY('q'):
+			write(STDOUT_FILENO, "\x1b[2J", 4);
+      		write(STDOUT_FILENO, "\x1b[H", 3);
+      		exit(0);
+      		break;
+  }
+}
 
 /*** init ***/
-
 int main() {
 	enableRawMode();
 	
 	while (1) {
-		char c = '\0';
-		if (read(STDIN_FILENO, &c, 1) == -1 && errno != EAGAIN) die("read");
-		if (iscntrl(c)) {									// to check whether 'c' is a control character (cannot be printed) [ACSII 0 to 31]
-			printf("%d\r\n", c);									
-		} else {
-			printf("%d ('%c')\r\n", c, c);					// print with ASCII value
-		} if (c == 'q') break;
+		editorRefreshScreen();
+		editorProcessKeypress();
 	}
 	return 0;
 }
